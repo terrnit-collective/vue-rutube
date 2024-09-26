@@ -1,6 +1,6 @@
 <template>
   <iframe
-    id="rutube-player"
+    ref="playerRef"
     :width="width"
     :height="height"
     :src="sourceUrl"
@@ -12,19 +12,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, toRefs, watch } from "vue";
+import { MessageToIframe, ChangeState, PlayerMessageType } from "./types";
 
 interface Props {
   src?: string;
-  videoId: string;
-  width: string;
-  height: string;
-  frameborder: string;
+  videoId?: string;
+  width?: string;
+  height?: string;
+  frameborder?: string;
+  loop?: boolean;
+  autoplay?: boolean;
+  mute?: boolean;
 }
 
 const props = defineProps<Props>();
 
+const { src, loop, autoplay, mute } = toRefs(props);
+
 const emit = defineEmits<{
+  (e: "playComplete"): void;
   (e: "ready", state: boolean): void;
   (e: "currentTime", time: number): void;
   (e: "changeVideo", id: string, quality: 1 | 0): void;
@@ -32,27 +39,41 @@ const emit = defineEmits<{
 }>();
 
 const isReady = ref<boolean>(false);
+const isPlaying = ref<boolean>(false);
+
 const currentTime = ref<number>(0);
 const playerRef = ref<HTMLIFrameElement | null>(null);
 
-const DEFAULT_VIDEO_ID = "7163336";
-
 onMounted(() => {
-  playerRef.value = document.getElementById(
-    "rutube-player"
-  ) as HTMLIFrameElement;
-
   onHandleEvent();
+
+  if (mute.value) onMute();
 });
 
-const sourceUrl = computed(() => {
-  if (!props.src) {
-    return `https://rutube.ru/play/embed/${
-      props.videoId ?? DEFAULT_VIDEO_ID
-    }?quality=1`;
-  }
-  return props.src;
-});
+watch(
+  mute,
+  (value) => {
+    if (value) onMute();
+    else unMute();
+  },
+  { immediate: true }
+);
+
+watch(
+  autoplay,
+  (value) => {
+    if (value) {
+      onPlay();
+      onMute();
+    } else {
+      onPause();
+      unMute();
+    }
+  },
+  { immediate: true }
+);
+
+const sourceUrl = computed(() => src?.value);
 
 function sendPostMessage(type: PlayerMessageType, data: unknown) {
   if (!isReady.value) return;
@@ -106,188 +127,33 @@ function onChangeVideo(id: string, quality: 1 | 0 = 1) {
 }
 
 function onSetVolume(volume: number) {
-  sendPostMessage("setVolume", { volume: volume });
+  sendPostMessage("setVolume", { volume });
 }
 
 function onSetSkinColor(color: string) {
-  sendPostMessage("setSkinColor", { params: { color: color } });
+  sendPostMessage("setSkinColor", { params: { color } });
 }
 
 function onRemove() {
   sendPostMessage("remove", {});
 }
 
-type PlayerMessageType =
-  | "ready"
-  | "changeState"
-  | "currentTime"
-  | "play"
-  | "pause"
-  | "stop"
-  | "mute"
-  | "unMute"
-  | "setVolume"
-  | "setCurrentTime"
-  | "relativelySeek"
-  | "changeVideo"
-  | "setSkinColor"
-  | "remove"
-  | "error"
-  | "changeFullscreen"
-  | "rollState"
-  | "playComplete"
-  | "durationChange"
-  | null;
-
-type PlayerMessageTypeBuilder<T extends PlayerMessageType> = T extends null
-  ? null
-  : `player:${T}`;
-
-// Base Message Type
-interface PlayerMessageFabric<T = any, M extends PlayerMessageType = null> {
-  type: PlayerMessageTypeBuilder<M>;
-  data: T;
-}
-
-// // Playback Control Messages
-type PlayMessage = PlayerMessageFabric<{}, "play">;
-type PauseMessage = PlayerMessageFabric<{}, "pause">;
-type StopMessage = PlayerMessageFabric<{}, "stop">;
-type MuteMessage = PlayerMessageFabric<{}, "mute">;
-type UnmuteMessage = PlayerMessageFabric<{}, "unMute">;
-
-// Volume and CurrentTime Messages
-interface VolumeChangeData {
-  volume: number; // 0 to 1
-}
-
-interface SetSkinColorData {
-  params: {
-    color: string;
-  };
-}
-
-type SetSkinColorMessage = PlayerMessageFabric<
-  SetSkinColorData,
-  "setSkinColor"
->;
-
-type VolumeChangeMessage = PlayerMessageFabric<VolumeChangeData, "setVolume">;
-
-// Change Video Messages
-interface ChangeVideoData {
-  id: string;
-  params?: {
-    hash?: string;
-    p?: string; // private key
-    quality?: number; // 1 for highest quality, -2 for lowest
-  };
-}
-type ChangeVideoMessage = PlayerMessageFabric<ChangeVideoData, "changeVideo">;
-
-// Seek and SetCurrentTime Messages
-interface RelativelySeekData {
-  time: number; // seconds to seek
-}
-type RelativelySeekMessage = PlayerMessageFabric<
-  RelativelySeekData,
-  "relativelySeek"
->;
-
-interface CurrentTimeData {
-  time: number; // time in seconds to set
-}
-type CurrentTimeMessage = PlayerMessageFabric<CurrentTimeData, "currentTime">;
-
-// Fullscreen Change Message
-interface ChangeFullscreenData {
-  isFullscreen: boolean; // true or false
-}
-type ChangeFullscreenMessage = PlayerMessageFabric<
-  ChangeFullscreenData,
-  "changeFullscreen"
->;
-
-// Error Message
-interface ErrorData {
-  code: string; // error code
-  text: string; // error message
-}
-type ErrorMessage = PlayerMessageFabric<ErrorData, "error">;
-
-// Roll State Message
-interface RollStateData {
-  rollState:
-    | "preRoll"
-    | "pauseBanner"
-    | "postRoll"
-    | "midRoll"
-    | "pauseRoll"
-    | "overlay";
-  state: "play" | "complete";
-  guid: string;
-}
-type RollStateMessage = PlayerMessageFabric<RollStateData, "rollState">;
-
-// Play Complete Message
-type PlayCompleteMessage = PlayerMessageFabric<{}, "playComplete">;
-
-// Change State Message
-type ChangeState =
-  | "playing"
-  | "paused"
-  | "stopped"
-  | "lockScreenOn"
-  | "lockScreenOff";
-
-interface ChangeStateData {
-  state: ChangeState;
-  isLicensed: boolean;
-}
-type ChangeStateMessage = PlayerMessageFabric<ChangeStateData, "changeState">;
-
-// Duration Change Message
-interface DurationChangeData {
-  duration: number; // duration of the video in seconds
-}
-type DurationChangeMessage = PlayerMessageFabric<
-  DurationChangeData,
-  "durationChange"
->;
-
-// Ready Message
-type ReadyMessage = PlayerMessageFabric<{}, "ready">;
-
-type MessageToIframe =
-  | ReadyMessage
-  | ChangeStateMessage
-  | DurationChangeMessage
-  | PlayCompleteMessage
-  | RollStateMessage
-  | ChangeFullscreenMessage
-  | CurrentTimeMessage
-  | RelativelySeekMessage
-  | ChangeVideoMessage
-  | VolumeChangeMessage
-  | MuteMessage
-  | UnmuteMessage
-  | StopMessage
-  | PauseMessage
-  | PlayMessage
-  | ErrorMessage
-  | SetSkinColorMessage
-  | CurrentTimeMessage;
-
 function onHandleEvent() {
   window.addEventListener("message", (event: MessageEvent<MessageToIframe>) => {
     const message = JSON.parse(event.data as unknown as string);
-    console.log(message, "MESSAGE AFTER PARSE");
     onEmitEvent(message);
   });
 }
 
 function onEmitEvent(message: MessageToIframe) {
   switch (message.type) {
+    case "player:init": {
+      if (autoplay.value) {
+        // Костыль, чтобы потом отловить в событие `player:currentTime` и запустить видео
+        isPlaying.value = true;
+      }
+      break;
+    }
     case "player:ready":
       isReady.value = true;
       emit("ready", isReady.value);
@@ -295,13 +161,32 @@ function onEmitEvent(message: MessageToIframe) {
     case "player:changeState":
       emit(message.data.state, message.data.isLicensed);
       break;
+
+    case "player:playComplete": {
+      if (loop.value && src?.value) {
+        const temp = src.value;
+        src.value = temp;
+        onPlay();
+      }
+
+      emit("playComplete");
+      break;
+    }
     case "player:currentTime":
+      if (autoplay.value && isPlaying.value) {
+        onPlay();
+        onMute();
+
+        isPlaying.value = false;
+      }
       currentTime.value = message.data.time;
       emit("currentTime", message.data.time);
   }
 }
 
 defineExpose({
+  playerRef,
+
   onPlay,
   onPause,
   onStop,
